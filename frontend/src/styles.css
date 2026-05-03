@@ -328,3 +328,19 @@ th {
     grid-template-columns: 1fr;
   }
 }
+.nav {
+  width: 100%;
+  margin-bottom: 11px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #e5e7eb;
+  justify-content: flex-start;
+}
+
+.nav:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.nav.active {
+  background: #e5e7eb;
+  color: #111827;
+}
