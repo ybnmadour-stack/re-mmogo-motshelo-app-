@@ -8,6 +8,7 @@ body {
   background: linear-gradient(135deg, #0f172a, #334155, #111827);
   color: #f8fafc;
   min-height: 100vh;
+  overflow-y: auto;
 }
 
 a {
@@ -153,6 +154,10 @@ button:hover:not(:disabled) {
   padding: 28px;
   display: grid;
   gap: 22px;
+  min-height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 180px;
 }
 
 .topbar {
@@ -208,6 +213,7 @@ button:hover:not(:disabled) {
 
 .panel {
   padding: 22px;
+  overflow: visible;
 }
 
 .panel h2 {
@@ -234,7 +240,9 @@ button:hover:not(:disabled) {
 }
 
 .table-wrap {
-  overflow: auto;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 table {
@@ -328,6 +336,7 @@ th {
     grid-template-columns: 1fr;
   }
 }
+
 .nav {
   width: 100%;
   margin-bottom: 11px;
