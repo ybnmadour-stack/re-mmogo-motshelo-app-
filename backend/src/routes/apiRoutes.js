@@ -3,6 +3,7 @@ const { run, get, all } = require("../config/db");
 const auth = require("../middleware/auth");
 
 const router = express.Router();
+
 router.use(auth);
 
 async function requireGroup(id) {
@@ -15,6 +16,10 @@ async function requireSignatory(groupId, signatoryId) {
     [signatoryId, groupId]
   );
 }
+
+/* =========================
+   DASHBOARD
+========================= */
 
 router.get("/dashboard", async (req, res) => {
   try {
@@ -46,6 +51,10 @@ router.get("/dashboard", async (req, res) => {
   }
 });
 
+/* =========================
+   GROUPS
+========================= */
+
 router.post("/groups", async (req, res) => {
   try {
     const { name, description } = req.body;
@@ -71,6 +80,10 @@ router.post("/groups", async (req, res) => {
     });
   }
 });
+
+/* =========================
+   MEMBERS
+========================= */
 
 router.get("/groups/:groupId/members", async (req, res) => {
   try {
@@ -106,11 +119,33 @@ router.post("/groups/:groupId/members", async (req, res) => {
       });
     }
 
-    const { full_name, email, phone, is_signatory } = req.body;
+    const { email, phone, is_signatory } = req.body;
 
-    if (!full_name) {
+    if (!email) {
       return res.status(400).json({
-        message: "Member full name is required",
+        message: "Member email is required",
+      });
+    }
+
+    const existingUser = await get("SELECT * FROM users WHERE email = ?", [
+      email,
+    ]);
+
+    if (!existingUser) {
+      return res.status(400).json({
+        message:
+          "This person must create an account first before being added to a group",
+      });
+    }
+
+    const alreadyMember = await get(
+      "SELECT * FROM members WHERE group_id = ? AND email = ?",
+      [req.params.groupId, email]
+    );
+
+    if (alreadyMember) {
+      return res.status(400).json({
+        message: "This user is already a member of this group",
       });
     }
 
@@ -118,16 +153,14 @@ router.post("/groups/:groupId/members", async (req, res) => {
       "INSERT INTO members (group_id, full_name, email, phone, is_signatory) VALUES (?, ?, ?, ?, ?)",
       [
         req.params.groupId,
-        full_name,
-        email || "",
+        existingUser.name,
+        existingUser.email,
         phone || "",
         is_signatory ? 1 : 0,
       ]
     );
 
-    const member = await get("SELECT * FROM members WHERE id = ?", [
-      result.id,
-    ]);
+    const member = await get("SELECT * FROM members WHERE id = ?", [result.id]);
 
     res.status(201).json(member);
   } catch (error) {
@@ -137,6 +170,10 @@ router.post("/groups/:groupId/members", async (req, res) => {
     });
   }
 });
+
+/* =========================
+   CONTRIBUTIONS
+========================= */
 
 router.get("/contributions", async (req, res) => {
   try {
@@ -188,15 +225,15 @@ router.post("/contributions", async (req, res) => {
 
     const value = Number(amount || 1000);
 
-    if (value < 1) {
+    if (value <= 0) {
       return res.status(400).json({
         message: "Amount must be greater than zero",
       });
     }
 
     const result = await run(
-      "INSERT INTO contributions (group_id, member_id, amount, month, proof_url) VALUES (?, ?, ?, ?, ?)",
-      [group_id, member_id, value, month, proof_url || ""]
+      "INSERT INTO contributions (group_id, member_id, amount, month, proof_url, status) VALUES (?, ?, ?, ?, ?, ?)",
+      [group_id, member_id, value, month, proof_url || "", "pending"]
     );
 
     res.status(201).json(
@@ -214,10 +251,9 @@ router.patch("/contributions/:id/approve", async (req, res) => {
   try {
     const { signatory_id } = req.body;
 
-    const contribution = await get(
-      "SELECT * FROM contributions WHERE id = ?",
-      [req.params.id]
-    );
+    const contribution = await get("SELECT * FROM contributions WHERE id = ?", [
+      req.params.id,
+    ]);
 
     if (!contribution) {
       return res.status(404).json({
@@ -236,10 +272,10 @@ router.patch("/contributions/:id/approve", async (req, res) => {
       });
     }
 
-    await run(
-      "UPDATE contributions SET status = ?, approved_by = ? WHERE id = ?",
-      ["approved", signatory_id, req.params.id]
-    );
+    await run("UPDATE contributions SET status = ? WHERE id = ?", [
+      "approved",
+      req.params.id,
+    ]);
 
     res.json({
       message: "Contribution approved",
@@ -252,10 +288,18 @@ router.patch("/contributions/:id/approve", async (req, res) => {
   }
 });
 
+/* =========================
+   LOANS
+========================= */
+
 router.get("/loans", async (req, res) => {
   try {
     const rows = await all(`
-      SELECT l.*, m.full_name, g.name AS group_name
+      SELECT 
+        l.*, 
+        m.full_name, 
+        g.name AS group_name,
+        COALESCE((SELECT COUNT(*) FROM loan_approvals la WHERE la.loan_id = l.id), 0) AS approval_count
       FROM loans l
       JOIN members m ON m.id = l.member_id
       JOIN groups g ON g.id = l.group_id
@@ -303,13 +347,11 @@ router.post("/loans", async (req, res) => {
     }
 
     const result = await run(
-      "INSERT INTO loans (group_id, member_id, principal, balance, purpose) VALUES (?, ?, ?, ?, ?)",
-      [group_id, member_id, amount, amount, purpose || ""]
+      "INSERT INTO loans (group_id, member_id, principal, balance, purpose, status) VALUES (?, ?, ?, ?, ?, ?)",
+      [group_id, member_id, amount, amount, purpose || "", "pending"]
     );
 
-    res.status(201).json(
-      await get("SELECT * FROM loans WHERE id = ?", [result.id])
-    );
+    res.status(201).json(await get("SELECT * FROM loans WHERE id = ?", [result.id]));
   } catch (error) {
     res.status(500).json({
       message: "Could not request loan",
@@ -322,9 +364,7 @@ router.patch("/loans/:id/approve", async (req, res) => {
   try {
     const { signatory_id } = req.body;
 
-    const loan = await get("SELECT * FROM loans WHERE id = ?", [
-      req.params.id,
-    ]);
+    const loan = await get("SELECT * FROM loans WHERE id = ?", [req.params.id]);
 
     if (!loan) {
       return res.status(404).json({
@@ -365,15 +405,15 @@ router.patch("/loans/:id/approve", async (req, res) => {
     const status = count.approvals >= 2 ? "disbursed" : "pending";
 
     await run(
-      "UPDATE loans SET approvals = ?, status = ?, disbursed_at = CASE WHEN ? = ? THEN CURRENT_TIMESTAMP ELSE disbursed_at END WHERE id = ?",
-      [count.approvals, status, status, "disbursed", req.params.id]
+      "UPDATE loans SET status = ? WHERE id = ?",
+      [status, req.params.id]
     );
 
     res.json({
       message:
         status === "disbursed"
-          ? "Loan disbursed after two approvals"
-          : "First approval recorded",
+          ? "Loan disbursed after two signatory approvals"
+          : "First approval recorded. One more signatory approval is required.",
       approvals: count.approvals,
       status,
     });
@@ -402,9 +442,46 @@ router.post("/loans/apply-monthly-interest", async (req, res) => {
   }
 });
 
+/* =========================
+   PAYMENTS
+========================= */
+
+router.get("/payments", async (req, res) => {
+  try {
+    const rows = await all(`
+      SELECT 
+        p.*, 
+        m.full_name, 
+        g.name AS group_name,
+        COALESCE((SELECT COUNT(*) FROM payment_approvals pa WHERE pa.payment_id = p.id), 0) AS approval_count
+      FROM payments p
+      JOIN members m ON m.id = p.member_id
+      JOIN groups g ON g.id = p.group_id
+      ORDER BY p.id DESC
+    `);
+
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({
+      message: "Could not load payments",
+      error: error.message,
+    });
+  }
+});
+
 router.post("/payments", async (req, res) => {
   try {
-    const { group_id, member_id, loan_id, type, amount, proof_url } = req.body;
+    const {
+      group_id,
+      member_id,
+      loan_id,
+      payment_type,
+      type,
+      amount,
+      proof_url,
+    } = req.body;
+
+    const finalType = payment_type || type;
 
     const group = await requireGroup(group_id);
 
@@ -425,7 +502,7 @@ router.post("/payments", async (req, res) => {
       });
     }
 
-    if (!["contribution", "loan_repayment"].includes(type)) {
+    if (!["contribution", "loan", "loan_repayment"].includes(finalType)) {
       return res.status(400).json({
         message: "Invalid payment type",
       });
@@ -439,7 +516,7 @@ router.post("/payments", async (req, res) => {
       });
     }
 
-    if (type === "loan_repayment") {
+    if (finalType === "loan" || finalType === "loan_repayment") {
       const loan = await get(
         "SELECT * FROM loans WHERE id = ? AND member_id = ? AND group_id = ?",
         [loan_id, member_id, group_id]
@@ -453,35 +530,22 @@ router.post("/payments", async (req, res) => {
     }
 
     const result = await run(
-      "INSERT INTO payments (group_id, member_id, loan_id, type, amount, proof_url) VALUES (?, ?, ?, ?, ?, ?)",
-      [group_id, member_id, loan_id || null, type, value, proof_url || ""]
+      "INSERT INTO payments (group_id, member_id, loan_id, type, amount, proof_url, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [
+        group_id,
+        member_id,
+        loan_id || null,
+        finalType === "loan" ? "loan_repayment" : finalType,
+        value,
+        proof_url || "",
+        "pending",
+      ]
     );
 
-    res.status(201).json(
-      await get("SELECT * FROM payments WHERE id = ?", [result.id])
-    );
+    res.status(201).json(await get("SELECT * FROM payments WHERE id = ?", [result.id]));
   } catch (error) {
     res.status(500).json({
       message: "Could not submit payment",
-      error: error.message,
-    });
-  }
-});
-
-router.get("/payments", async (req, res) => {
-  try {
-    const rows = await all(`
-      SELECT p.*, m.full_name, g.name AS group_name
-      FROM payments p
-      JOIN members m ON m.id = p.member_id
-      JOIN groups g ON g.id = p.group_id
-      ORDER BY p.id DESC
-    `);
-
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({
-      message: "Could not load payments",
       error: error.message,
     });
   }
@@ -501,6 +565,12 @@ router.patch("/payments/:id/approve", async (req, res) => {
       });
     }
 
+    if (payment.status === "approved") {
+      return res.status(400).json({
+        message: "Payment already approved",
+      });
+    }
+
     const signatory = await requireSignatory(payment.group_id, signatory_id);
 
     if (!signatory) {
@@ -509,27 +579,43 @@ router.patch("/payments/:id/approve", async (req, res) => {
       });
     }
 
-    if (payment.status === "approved") {
+    try {
+      await run(
+        "INSERT INTO payment_approvals (payment_id, signatory_id) VALUES (?, ?)",
+        [req.params.id, signatory_id]
+      );
+    } catch (error) {
       return res.status(400).json({
-        message: "Payment already approved",
+        message: "This signatory already approved this payment",
       });
     }
 
-    await run("UPDATE payments SET status = ?, approved_by = ? WHERE id = ?", [
-      "approved",
-      signatory_id,
-      req.params.id,
-    ]);
+    const count = await get(
+      "SELECT COUNT(*) AS approvals FROM payment_approvals WHERE payment_id = ?",
+      [req.params.id]
+    );
 
-    if (payment.type === "loan_repayment" && payment.loan_id) {
-      await run("UPDATE loans SET balance = MAX(balance - ?, 0) WHERE id = ?", [
-        payment.amount,
-        payment.loan_id,
+    if (count.approvals >= 2) {
+      await run("UPDATE payments SET status = ? WHERE id = ?", [
+        "approved",
+        req.params.id,
       ]);
+
+      if (payment.type === "loan_repayment" && payment.loan_id) {
+        await run(
+          "UPDATE loans SET balance = MAX(balance - ?, 0) WHERE id = ?",
+          [payment.amount, payment.loan_id]
+        );
+      }
     }
 
     res.json({
-      message: "Payment approved and recorded",
+      message:
+        count.approvals >= 2
+          ? "Payment approved after two signatory approvals"
+          : "First approval recorded. One more signatory approval is required.",
+      approvals: count.approvals,
+      status: count.approvals >= 2 ? "approved" : "pending",
     });
   } catch (error) {
     res.status(500).json({
@@ -539,6 +625,10 @@ router.patch("/payments/:id/approve", async (req, res) => {
   }
 });
 
+/* =========================
+   REPORTS
+========================= */
+
 router.get("/reports/year-end", async (req, res) => {
   try {
     const rows = await all(`
@@ -546,24 +636,76 @@ router.get("/reports/year-end", async (req, res) => {
         m.id,
         m.full_name,
         g.name AS group_name,
-        COALESCE(SUM(CASE WHEN c.status = 'approved' THEN c.amount ELSE 0 END), 0) AS total_contributed,
-        COALESCE((SELECT SUM(l.principal) FROM loans l WHERE l.member_id = m.id), 0) AS total_borrowed,
-        COALESCE((SELECT SUM(l.balance) FROM loans l WHERE l.member_id = m.id), 0) AS outstanding_balance,
-        COALESCE((SELECT SUM(l.balance - l.principal) FROM loans l WHERE l.member_id = m.id), 0) AS estimated_interest,
+
+        COALESCE((
+          SELECT SUM(c.amount)
+          FROM contributions c
+          WHERE c.member_id = m.id
+          AND c.status = 'approved'
+        ), 0) AS total_contributed,
+
+        COALESCE((
+          SELECT SUM(l.principal)
+          FROM loans l
+          WHERE l.member_id = m.id
+        ), 0) AS total_borrowed,
+
+        COALESCE((
+          SELECT SUM(l.balance)
+          FROM loans l
+          WHERE l.member_id = m.id
+        ), 0) AS outstanding_balance,
+
+        COALESCE((
+          SELECT SUM(l.balance - l.principal)
+          FROM loans l
+          WHERE l.member_id = m.id
+        ), 0) AS estimated_interest,
+
         5000 AS interest_target,
+
         CASE
-          WHEN COALESCE((SELECT SUM(l.balance - l.principal) FROM loans l WHERE l.member_id = m.id), 0) >= 5000
+          WHEN COALESCE((
+            SELECT SUM(l.balance - l.principal)
+            FROM loans l
+            WHERE l.member_id = m.id
+          ), 0) >= 5000
           THEN 'Target reached'
           ELSE 'Below target'
         END AS interest_status
+
       FROM members m
       JOIN groups g ON g.id = m.group_id
-      LEFT JOIN contributions c ON c.member_id = m.id
-      GROUP BY m.id
       ORDER BY estimated_interest DESC
     `);
 
-    res.json(rows);
+    const highestInterest = rows.length ? rows[0] : null;
+    const lowestInterest = rows.length ? rows[rows.length - 1] : null;
+
+    res.json({
+      members: rows,
+      summary: {
+        highestInterest,
+        lowestInterest,
+        totalMembers: rows.length,
+        totalContributions: rows.reduce(
+          (sum, item) => sum + Number(item.total_contributed || 0),
+          0
+        ),
+        totalBorrowed: rows.reduce(
+          (sum, item) => sum + Number(item.total_borrowed || 0),
+          0
+        ),
+        totalOutstanding: rows.reduce(
+          (sum, item) => sum + Number(item.outstanding_balance || 0),
+          0
+        ),
+        totalEstimatedInterest: rows.reduce(
+          (sum, item) => sum + Number(item.estimated_interest || 0),
+          0
+        ),
+      },
+    });
   } catch (error) {
     res.status(500).json({
       message: "Could not produce report",
