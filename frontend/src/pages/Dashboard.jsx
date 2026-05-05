@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";import {
+import React, { useEffect, useMemo, useState } from "react";
+import {
   LogOut,
   PlusCircle,
   Users,
@@ -25,8 +26,14 @@ export default function Dashboard() {
   const [members, setMembers] = useState([]);
   const [contributions, setContributions] = useState([]);
   const [loans, setLoans] = useState([]);
-  const [report, setReport] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [report, setReport] = useState({
+    members: [],
+    summary: {},
+  });
+
   const [selectedGroup, setSelectedGroup] = useState("");
+  const [selectedSignatory, setSelectedSignatory] = useState("");
   const [message, setMessage] = useState("");
 
   const user = getUser();
@@ -37,7 +44,6 @@ export default function Dashboard() {
   });
 
   const [memberForm, setMemberForm] = useState({
-    full_name: "",
     email: "",
     phone: "",
     is_signatory: false,
@@ -88,13 +94,20 @@ export default function Dashboard() {
       if (firstGroup) {
         const loadedMembers = await api(`/api/groups/${firstGroup}/members`);
         setMembers(loadedMembers);
+
+        const firstSignatory =
+          loadedMembers.find((member) => Number(member.is_signatory) === 1)
+            ?.id || "";
+
+        setSelectedSignatory(firstSignatory);
       }
 
       setContributions(await api("/api/contributions"));
       setLoans(await api("/api/loans"));
+      setPayments(await api("/api/payments"));
       setReport(await api("/api/reports/year-end"));
     } catch (err) {
-      setMessage(err.message);
+      setMessage(err.message || "Could not load dashboard data.");
     }
   }
 
@@ -105,7 +118,15 @@ export default function Dashboard() {
   useEffect(() => {
     if (selectedGroup) {
       api(`/api/groups/${selectedGroup}/members`)
-        .then(setMembers)
+        .then((loadedMembers) => {
+          setMembers(loadedMembers);
+
+          const firstSignatory =
+            loadedMembers.find((member) => Number(member.is_signatory) === 1)
+              ?.id || "";
+
+          setSelectedSignatory(firstSignatory);
+        })
         .catch(() => {});
     }
   }, [selectedGroup]);
@@ -117,6 +138,10 @@ export default function Dashboard() {
       </option>
     ));
   }, [data.groups]);
+
+  const signatories = members.filter(
+    (member) => Number(member.is_signatory) === 1
+  );
 
   async function handleCreateGroup(e) {
     e.preventDefault();
@@ -135,7 +160,7 @@ export default function Dashboard() {
       setMessage("Group registered successfully.");
       load();
     } catch (err) {
-      setMessage("Could not create group");
+      setMessage(err.message || "Could not create group.");
     }
   }
 
@@ -154,16 +179,15 @@ export default function Dashboard() {
       });
 
       setMemberForm({
-        full_name: "",
         email: "",
         phone: "",
         is_signatory: false,
       });
 
-      setMessage("Member enrolled successfully.");
+      setMessage("Registered user added to group successfully.");
       load();
     } catch (err) {
-      setMessage("Could not add member");
+      setMessage(err.message || "Could not add member.");
     }
   }
 
@@ -179,10 +203,10 @@ export default function Dashboard() {
         }),
       });
 
-      setMessage("Contribution submitted for signatory approval.");
+      setMessage("Contribution submitted for approval.");
       load();
     } catch (err) {
-      setMessage("Could not submit contribution");
+      setMessage(err.message || "Could not submit contribution.");
     }
   }
 
@@ -207,7 +231,7 @@ export default function Dashboard() {
       setMessage("Loan request submitted. It needs two approvals.");
       load();
     } catch (err) {
-      setMessage("Could not record loan");
+      setMessage(err.message || "Could not record loan.");
     }
   }
 
@@ -217,7 +241,10 @@ export default function Dashboard() {
     try {
       await api("/api/payments", {
         method: "POST",
-        body: JSON.stringify(paymentForm),
+        body: JSON.stringify({
+          ...paymentForm,
+          group_id: selectedGroup,
+        }),
       });
 
       setPaymentForm({
@@ -231,44 +258,84 @@ export default function Dashboard() {
       setMessage("Payment submitted for approval.");
       load();
     } catch (err) {
-      setMessage("Could not submit payment");
+      setMessage(err.message || "Could not submit payment.");
     }
   }
 
   async function approveContribution(id) {
-    await api(`/api/contributions/${id}/approve`, {
-      method: "PATCH",
-    });
+    if (!selectedSignatory) {
+      setMessage("Select a signatory first.");
+      return;
+    }
 
-    setMessage("Contribution approved.");
-    load();
+    try {
+      const result = await api(`/api/contributions/${id}/approve`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          signatory_id: selectedSignatory,
+        }),
+      });
+
+      setMessage(result.message || "Contribution approved.");
+      load();
+    } catch (err) {
+      setMessage(err.message || "Could not approve contribution.");
+    }
   }
 
   async function approveLoan(id) {
-    await api(`/api/loans/${id}/approve`, {
-      method: "PATCH",
-    });
+    if (!selectedSignatory) {
+      setMessage("Select a signatory first.");
+      return;
+    }
 
-    setMessage("Loan approval recorded.");
-    load();
+    try {
+      const result = await api(`/api/loans/${id}/approve`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          signatory_id: selectedSignatory,
+        }),
+      });
+
+      setMessage(result.message || "Loan approval recorded.");
+      load();
+    } catch (err) {
+      setMessage(err.message || "Could not approve loan.");
+    }
   }
 
   async function approvePayment(id) {
-    await api(`/api/payments/${id}/approve`, {
-      method: "PATCH",
-    });
+    if (!selectedSignatory) {
+      setMessage("Select a signatory first.");
+      return;
+    }
 
-    setMessage("Payment approved.");
-    load();
+    try {
+      const result = await api(`/api/payments/${id}/approve`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          signatory_id: selectedSignatory,
+        }),
+      });
+
+      setMessage(result.message || "Payment approval recorded.");
+      load();
+    } catch (err) {
+      setMessage(err.message || "Could not approve payment.");
+    }
   }
 
   async function applyInterest() {
-    await api("/api/loans/apply-monthly-interest", {
-      method: "POST",
-    });
+    try {
+      const result = await api("/api/loans/apply-monthly-interest", {
+        method: "POST",
+      });
 
-    setMessage("20% monthly interest applied.");
-    load();
+      setMessage(result.message || "20% monthly interest applied.");
+      load();
+    } catch (err) {
+      setMessage(err.message || "Could not apply interest.");
+    }
   }
 
   function logout() {
@@ -334,17 +401,32 @@ export default function Dashboard() {
             <h1>{pageTitle(activePage)}</h1>
             <p>
               Welcome, {user?.name || "member"}. Manage Motshelo groups,
-              members, payments and reports.
+              members, contributions, loans, payments and reports.
             </p>
           </div>
 
-          <select
-            value={selectedGroup}
-            onChange={(e) => setSelectedGroup(e.target.value)}
-          >
-            <option value="">Select group</option>
-            {groupOptions}
-          </select>
+          <div className="top-controls">
+            <select
+              value={selectedGroup}
+              onChange={(e) => setSelectedGroup(e.target.value)}
+            >
+              <option value="">Select group</option>
+              {groupOptions}
+            </select>
+
+            <select
+              value={selectedSignatory}
+              onChange={(e) => setSelectedSignatory(e.target.value)}
+            >
+              <option value="">Select signatory</option>
+
+              {signatories.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.full_name}
+                </option>
+              ))}
+            </select>
+          </div>
         </header>
 
         {message && <div className="notice">{message}</div>}
@@ -393,6 +475,7 @@ export default function Dashboard() {
             handlePayment={handlePayment}
             members={members}
             loans={loans}
+            payments={payments}
             approvePayment={approvePayment}
           />
         )}
@@ -485,28 +568,13 @@ function GroupsMembersPage({
           </form>
         </Panel>
 
-        <Panel title="2. Enroll Member Into Group">
+        <Panel title="2. Enroll Registered User Into Group">
           <form onSubmit={handleAddMember} className="mini-form">
             <label>
-              Full name
-              <input
-                placeholder="Member full name"
-                value={memberForm.full_name}
-                onChange={(e) =>
-                  setMemberForm({
-                    ...memberForm,
-                    full_name: e.target.value,
-                  })
-                }
-                required
-              />
-            </label>
-
-            <label>
-              Email
+              Registered user email
               <input
                 type="email"
-                placeholder="Member email"
+                placeholder="User must already have an account"
                 value={memberForm.email}
                 onChange={(e) =>
                   setMemberForm({
@@ -514,6 +582,7 @@ function GroupsMembersPage({
                     email: e.target.value,
                   })
                 }
+                required
               />
             </label>
 
@@ -545,7 +614,7 @@ function GroupsMembersPage({
               Signatory / Approver
             </label>
 
-            <button>Add member</button>
+            <button>Add registered user</button>
           </form>
         </Panel>
       </div>
@@ -573,7 +642,11 @@ function GroupsMembersPage({
                     <td>{member.full_name}</td>
                     <td>{member.email || "-"}</td>
                     <td>{member.phone || "-"}</td>
-                    <td>{member.is_signatory ? "Signatory" : "Member"}</td>
+                    <td>
+                      {Number(member.is_signatory) === 1
+                        ? "Signatory"
+                        : "Member"}
+                    </td>
                   </tr>
                 ))
               )}
@@ -610,6 +683,7 @@ function ContributionsPage({
               required
             >
               <option value="">Select member</option>
+
               {members.map((member) => (
                 <option key={member.id} value={member.id}>
                   {member.full_name}
@@ -734,6 +808,7 @@ function LoansPage({
               required
             >
               <option value="">Select member</option>
+
               {members.map((member) => (
                 <option key={member.id} value={member.id}>
                   {member.full_name}
@@ -788,6 +863,7 @@ function LoansPage({
                 <th>Member</th>
                 <th>Principal</th>
                 <th>Balance</th>
+                <th>Approvals</th>
                 <th>Status</th>
                 <th>Action</th>
               </tr>
@@ -799,6 +875,7 @@ function LoansPage({
                   <td>{loan.full_name}</td>
                   <td>P{loan.principal}</td>
                   <td>P{loan.balance}</td>
+                  <td>{loan.approval_count || 0}/2</td>
                   <td>{loan.status}</td>
                   <td>
                     {loan.status !== "disbursed" && (
@@ -826,6 +903,7 @@ function PaymentsPage({
   handlePayment,
   members,
   loans,
+  payments,
   approvePayment,
 }) {
   return (
@@ -861,6 +939,7 @@ function PaymentsPage({
               required
             >
               <option value="">Select member</option>
+
               {members.map((member) => (
                 <option key={member.id} value={member.id}>
                   {member.full_name}
@@ -881,6 +960,7 @@ function PaymentsPage({
               }
             >
               <option value="">No loan selected</option>
+
               {loans.map((loan) => (
                 <option key={loan.id} value={loan.id}>
                   {loan.full_name} - P{loan.balance}
@@ -923,45 +1003,140 @@ function PaymentsPage({
         </form>
       </Panel>
 
-      <Panel title="Payment Approval">
-        <p>
-          Payments are submitted by members and must be approved by signatories
-          before they reflect in the records.
-        </p>
+      <Panel title="Payment Records">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Member</th>
+                <th>Group</th>
+                <th>Type</th>
+                <th>Amount</th>
+                <th>Approvals</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {payments.map((payment) => (
+                <tr key={payment.id}>
+                  <td>{payment.full_name}</td>
+                  <td>{payment.group_name}</td>
+                  <td>{payment.type}</td>
+                  <td>P{payment.amount}</td>
+                  <td>{payment.approval_count || 0}/2</td>
+                  <td>{payment.status}</td>
+                  <td>
+                    {payment.status !== "approved" && (
+                      <button
+                        className="small-btn"
+                        onClick={() => approvePayment(payment.id)}
+                      >
+                        Approve
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Panel>
     </>
   );
 }
 
 function ReportsPage({ report }) {
-  return (
-    <Panel title="Year-End Report">
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Member</th>
-              <th>Contributed</th>
-              <th>Borrowed</th>
-              <th>Outstanding</th>
-              <th>Estimated Interest</th>
-            </tr>
-          </thead>
+  const members = report.members || [];
+  const summary = report.summary || {};
 
-          <tbody>
-            {report.map((item) => (
-              <tr key={item.id}>
-                <td>{item.full_name}</td>
-                <td>P{Number(item.total_contributed).toFixed(2)}</td>
-                <td>P{Number(item.total_borrowed).toFixed(2)}</td>
-                <td>P{Number(item.outstanding_balance).toFixed(2)}</td>
-                <td>P{Number(item.estimated_interest).toFixed(2)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+  return (
+    <>
+      <div className="cards">
+        <Stat
+          icon={<Users />}
+          label="Report Members"
+          value={summary.totalMembers || 0}
+        />
+
+        <Stat
+          icon={<Wallet />}
+          label="Total Contributions"
+          value={`P${Number(summary.totalContributions || 0).toFixed(2)}`}
+        />
+
+        <Stat
+          icon={<Landmark />}
+          label="Total Borrowed"
+          value={`P${Number(summary.totalBorrowed || 0).toFixed(2)}`}
+        />
+
+        <Stat
+          icon={<FileText />}
+          label="Total Interest"
+          value={`P${Number(summary.totalEstimatedInterest || 0).toFixed(2)}`}
+        />
       </div>
-    </Panel>
+
+      <div className="grid two">
+        <Panel title="Highest Interest Member">
+          <p>
+            <strong>{summary.highestInterest?.full_name || "No data yet"}</strong>
+          </p>
+
+          <p>
+            Estimated Interest: P
+            {Number(summary.highestInterest?.estimated_interest || 0).toFixed(2)}
+          </p>
+        </Panel>
+
+        <Panel title="Lowest Interest Member">
+          <p>
+            <strong>{summary.lowestInterest?.full_name || "No data yet"}</strong>
+          </p>
+
+          <p>
+            Estimated Interest: P
+            {Number(summary.lowestInterest?.estimated_interest || 0).toFixed(2)}
+          </p>
+        </Panel>
+      </div>
+
+      <Panel title="Year-End Report">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Member</th>
+                <th>Group</th>
+                <th>Contributed</th>
+                <th>Borrowed</th>
+                <th>Outstanding</th>
+                <th>Interest</th>
+                <th>Target</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {members.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.full_name}</td>
+                  <td>{item.group_name}</td>
+                  <td>P{Number(item.total_contributed).toFixed(2)}</td>
+                  <td>P{Number(item.total_borrowed).toFixed(2)}</td>
+                  <td>P{Number(item.outstanding_balance).toFixed(2)}</td>
+                  <td>P{Number(item.estimated_interest).toFixed(2)}</td>
+                  <td>P{Number(item.interest_target).toFixed(2)}</td>
+                  <td>{item.interest_status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </>
   );
 }
 
