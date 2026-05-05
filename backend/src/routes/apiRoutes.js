@@ -441,7 +441,6 @@ router.post("/loans/apply-monthly-interest", async (req, res) => {
     });
   }
 });
-
 /* =========================
    PAYMENTS
 ========================= */
@@ -516,7 +515,15 @@ router.post("/payments", async (req, res) => {
       });
     }
 
+    let cleanLoanId = null;
+
     if (finalType === "loan" || finalType === "loan_repayment") {
+      if (!loan_id) {
+        return res.status(400).json({
+          message: "Please select a loan for loan repayment",
+        });
+      }
+
       const loan = await get(
         "SELECT * FROM loans WHERE id = ? AND member_id = ? AND group_id = ?",
         [loan_id, member_id, group_id]
@@ -527,6 +534,14 @@ router.post("/payments", async (req, res) => {
           message: "Loan repayment must belong to the selected member",
         });
       }
+
+      if (loan.status !== "disbursed") {
+        return res.status(400).json({
+          message: "Loan must be disbursed before repayment can be made",
+        });
+      }
+
+      cleanLoanId = loan_id;
     }
 
     const result = await run(
@@ -534,7 +549,7 @@ router.post("/payments", async (req, res) => {
       [
         group_id,
         member_id,
-        loan_id || null,
+        cleanLoanId,
         finalType === "loan" ? "loan_repayment" : finalType,
         value,
         proof_url || "",
@@ -542,7 +557,9 @@ router.post("/payments", async (req, res) => {
       ]
     );
 
-    res.status(201).json(await get("SELECT * FROM payments WHERE id = ?", [result.id]));
+    res.status(201).json(
+      await get("SELECT * FROM payments WHERE id = ?", [result.id])
+    );
   } catch (error) {
     res.status(500).json({
       message: "Could not submit payment",
@@ -605,6 +622,20 @@ router.patch("/payments/:id/approve", async (req, res) => {
         await run(
           "UPDATE loans SET balance = MAX(balance - ?, 0) WHERE id = ?",
           [payment.amount, payment.loan_id]
+        );
+      }
+
+      if (payment.type === "contribution") {
+        await run(
+          "INSERT INTO contributions (group_id, member_id, amount, month, proof_url, status) VALUES (?, ?, ?, ?, ?, ?)",
+          [
+            payment.group_id,
+            payment.member_id,
+            payment.amount,
+            new Date().toISOString().slice(0, 7),
+            payment.proof_url || "",
+            "approved",
+          ]
         );
       }
     }
