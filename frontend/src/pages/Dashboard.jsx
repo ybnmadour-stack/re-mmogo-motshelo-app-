@@ -104,7 +104,14 @@ export default function Dashboard() {
 
       setContributions(await api("/api/contributions"));
       setLoans(await api("/api/loans"));
-      setPayments(await api("/api/payments"));
+
+      try {
+        setPayments(await api("/api/payments"));
+      } catch (err) {
+        console.log("Payments not loaded:", err.message);
+        setPayments([]);
+      }
+
       setReport(await api("/api/reports/year-end"));
     } catch (err) {
       setMessage(err.message || "Could not load dashboard data.");
